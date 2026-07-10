@@ -10,8 +10,8 @@ import napari
 # ============================================================
 # 0. Basic settings
 # ============================================================
-HIGH_PATH = "./data/Train/HIGH/Train_001_HiGH.bin"
-LOW_PATH  = "./data/Train/LOW/Train_001_LOW.bin"
+HIGH_PATH = "./../data/Train/HIGH/Train_001_HiGH.bin"
+LOW_PATH  = "./../data/Train/LOW/Train_001_LOW.bin"
 
 SHAPE = (200, 200, 512)   # [H, W, D]
 DTYPE = np.uint16
