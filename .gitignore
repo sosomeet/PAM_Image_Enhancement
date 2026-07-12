@@ -3,3 +3,6 @@ data/
 models/
 *.pth
 *.hwp
+07_Fully_Dense_U-Net/outputs/history/training_history.csv
+07_Fully_Dense_U-Net/outputs/history/training_loss_curve.png
+07_Fully_Dense_U-Net/outputs/train_maps/epoch_005_map.png
