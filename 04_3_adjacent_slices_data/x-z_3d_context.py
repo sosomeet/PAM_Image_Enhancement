@@ -16,29 +16,61 @@ DATA_ROOT = Path("./data")
 NORM_TRAIN_LOW_DIR = DATA_ROOT / "norm_Train" / "LOW"
 NORM_TEST_LOW_DIR = DATA_ROOT / "norm_Test" / "LOW"
 
-# Output 3-adjacent-slice LOW volumes
+# Output 3-adjacent X-Z LOW volumes
 OUTPUT_TRAIN_LOW_DIR = DATA_ROOT / "3d_Train" / "LOW"
 OUTPUT_TEST_LOW_DIR = DATA_ROOT / "3d_Test" / "LOW"
 
-# Normalized PAM volume configuration
-VOLUME_SHAPE = (200, 200, 512)  # [H, W, D]
+# Original normalized PAM volume
+#
+# Shape order:
+#     [X, Y, Z]
+#
+# Shape:
+#     [200, 200, 512]
+#
+VOLUME_SHAPE = (200, 200, 512)
 
 INPUT_DTYPE = np.float32
 OUTPUT_DTYPE = np.float32
 
 HEADER_SIZE = 48
 
-# Three adjacent slices:
-# previous, current, next
 NUM_CHANNELS = 3
 
-# Output payload shape:
-# [D, C, H, W]
+
+# ============================================================
+# X-Z plane configuration
+# ============================================================
+
+X_SIZE = VOLUME_SHAPE[0]   # 200
+Y_SIZE = VOLUME_SHAPE[1]   # 200
+Z_SIZE = VOLUME_SHAPE[2]   # 512
+
+# All Y planes are preserved.
+#
+# y = 0:
+#     [0, 0, 1]
+#
+# y = 1:
+#     [0, 1, 2]
+#
+# ...
+#
+# y = 199:
+#     [198, 199, 199]
+#
+NUM_XZ_SAMPLES = Y_SIZE
+
+# Output shape:
+#
+# [N, C, X, Z]
+# [200, 3, 200, 512]
+#
 OUTPUT_SHAPE = (
-    VOLUME_SHAPE[2],   # D = 512
-    NUM_CHANNELS,      # C = 3
-    VOLUME_SHAPE[0],   # H = 200
-    VOLUME_SHAPE[1],   # W = 200
+    NUM_XZ_SAMPLES,
+    NUM_CHANNELS,
+    X_SIZE,
+    Z_SIZE,
 )
 
 
@@ -107,12 +139,18 @@ def validate_normalized_file(
     offset: int = HEADER_SIZE,
 ) -> None:
     """
-    Validate normalized LOW .bin file size.
+    Validate normalized LOW .bin file.
 
     Expected format:
+
         [48-byte header]
         +
-        [float32 payload with shape H x W x D]
+        [float32 payload]
+
+    Payload shape:
+
+        [X, Y, Z]
+        [200, 200, 512]
     """
 
     file_path = Path(file_path)
@@ -124,7 +162,9 @@ def validate_normalized_file(
 
     dtype = np.dtype(dtype)
 
-    expected_voxels = int(np.prod(shape))
+    expected_voxels = int(
+        np.prod(shape)
+    )
 
     expected_payload_bytes = (
         expected_voxels
@@ -136,7 +176,9 @@ def validate_normalized_file(
         + expected_payload_bytes
     )
 
-    actual_file_size = file_path.stat().st_size
+    actual_file_size = (
+        file_path.stat().st_size
+    )
 
     if actual_file_size != expected_file_size:
         raise ValueError(
@@ -161,10 +203,12 @@ def load_normalized_memmap(
     offset: int = HEADER_SIZE,
 ) -> np.memmap:
     """
-    Load normalized float32 LOW volume as np.memmap.
+    Load normalized float32 LOW volume.
 
     Shape:
-        [H, W, D] = [200, 200, 512]
+
+        [X, Y, Z]
+        [200, 200, 512]
     """
 
     validate_normalized_file(
@@ -187,85 +231,104 @@ def load_normalized_memmap(
 
 
 # ============================================================
-# 5. Get adjacent slice indices
+# 5. Get adjacent Y indices
 # ============================================================
 
-def get_adjacent_indices(
-    depth_index: int,
-    depth_size: int,
+def get_adjacent_y_indices(
+    y_index: int,
+    y_size: int,
 ) -> tuple[int, int, int]:
     """
-    Return:
-        previous_depth,
-        current_depth,
-        next_depth
+    Return three adjacent Y indices:
+
+        previous_y
+        current_y
+        next_y
 
     Boundary handling:
         replicate padding
 
     Examples:
-        d = 0
+
+        y = 0
         -> (0, 0, 1)
 
-        d = 100
+        y = 100
         -> (99, 100, 101)
 
-        d = 511
-        -> (510, 511, 511)
+        y = 199
+        -> (198, 199, 199)
     """
 
-    if depth_index < 0 or depth_index >= depth_size:
+    if y_index < 0 or y_index >= y_size:
         raise IndexError(
-            f"Invalid depth index: {depth_index}. "
-            f"Valid range: 0 ~ {depth_size - 1}"
+            f"Invalid Y index: {y_index}. "
+            f"Valid range: 0 ~ {y_size - 1}"
         )
 
-    previous_depth = max(
-        depth_index - 1,
+    previous_y = max(
+        y_index - 1,
         0,
     )
 
-    current_depth = depth_index
+    current_y = y_index
 
-    next_depth = min(
-        depth_index + 1,
-        depth_size - 1,
+    next_y = min(
+        y_index + 1,
+        y_size - 1,
     )
 
     return (
-        previous_depth,
-        current_depth,
-        next_depth,
+        previous_y,
+        current_y,
+        next_y,
     )
 
 
 # ============================================================
-# 6. Create one 3-adjacent-slice LOW file
+# 6. Create one 3-adjacent X-Z LOW file
 # ============================================================
 
-def create_adjacent_slice_file(
+def create_adjacent_xz_slice_file(
     input_path: Path,
     output_path: Path,
 ) -> dict:
     """
-    Convert one normalized LOW volume:
+    Convert one normalized LOW PAM volume.
 
-        Input:
-            [H, W, D]
-            [200, 200, 512]
+    Input:
+        [X, Y, Z]
+        [200, 200, 512]
 
-    into:
+    X-Z plane:
+        volume[:, y, :]
 
-        Output:
-            [D, C, H, W]
-            [512, 3, 200, 200]
+    Three adjacent X-Z planes:
 
-    Channels:
-        0 = previous LOW slice
-        1 = current LOW slice
-        2 = next LOW slice
+        Channel 0:
+            volume[:, y-1, :]
+
+        Channel 1:
+            volume[:, y, :]
+
+        Channel 2:
+            volume[:, y+1, :]
+
+    Boundary handling:
+
+        y = 0:
+            [0, 0, 1]
+
+        y = 199:
+            [198, 199, 199]
+
+    Output:
+
+        [N, C, X, Z]
+        [200, 3, 200, 512]
 
     Output file format:
+
         [original 48-byte header]
         +
         [float32 grouped payload]
@@ -278,17 +341,20 @@ def create_adjacent_slice_file(
     # Read original header
     # --------------------------------------------------------
 
-    header = read_header(input_path)
+    header = read_header(
+        input_path
+    )
 
     # --------------------------------------------------------
-    # Open normalized input LOW volume
+    # Load normalized LOW volume
+    #
+    # [X, Y, Z]
+    # [200, 200, 512]
     # --------------------------------------------------------
 
     volume = load_normalized_memmap(
         input_path
     )
-
-    height, width, depth = VOLUME_SHAPE
 
     # --------------------------------------------------------
     # Create output directory
@@ -300,17 +366,19 @@ def create_adjacent_slice_file(
     )
 
     # --------------------------------------------------------
-    # Write 48-byte header
+    # Write original 48-byte header
     # --------------------------------------------------------
 
     with output_path.open("wb") as f:
         f.write(header)
 
     # --------------------------------------------------------
-    # Create output payload directly on disk
+    # Create output memmap
     #
     # Shape:
-    #     [D, 3, H, W]
+    #
+    # [N, C, X, Z]
+    # [200, 3, 200, 512]
     # --------------------------------------------------------
 
     grouped = np.memmap(
@@ -323,40 +391,72 @@ def create_adjacent_slice_file(
     )
 
     # --------------------------------------------------------
-    # Process each depth slice
+    # Process all Y positions
+    #
+    # y = 0 ~ 199
     # --------------------------------------------------------
 
-    for d in range(depth):
+    for y in range(Y_SIZE):
 
-        prev_d, curr_d, next_d = (
-            get_adjacent_indices(
-                depth_index=d,
-                depth_size=depth,
+        previous_y, current_y, next_y = (
+            get_adjacent_y_indices(
+                y_index=y,
+                y_size=Y_SIZE,
             )
         )
 
-        # Channel 0: previous LOW slice
-        grouped[d, 0, :, :] = volume[
+        # ----------------------------------------------------
+        # Channel 0:
+        # Previous X-Z plane
+        #
+        # shape:
+        # [200, 512]
+        # ----------------------------------------------------
+
+        grouped[
+            y,
+            0,
             :,
             :,
-            prev_d,
+        ] = volume[
+            :,
+            previous_y,
+            :,
         ]
 
-        # Channel 1: current LOW slice
-        grouped[d, 1, :, :] = volume[
+        # ----------------------------------------------------
+        # Channel 1:
+        # Current X-Z plane
+        # ----------------------------------------------------
+
+        grouped[
+            y,
+            1,
             :,
             :,
-            curr_d,
+        ] = volume[
+            :,
+            current_y,
+            :,
         ]
 
-        # Channel 2: next LOW slice
-        grouped[d, 2, :, :] = volume[
+        # ----------------------------------------------------
+        # Channel 2:
+        # Next X-Z plane
+        # ----------------------------------------------------
+
+        grouped[
+            y,
+            2,
             :,
             :,
-            next_d,
+        ] = volume[
+            :,
+            next_y,
+            :,
         ]
 
-    # Write all buffered data to disk.
+    # Write buffered data to disk.
     grouped.flush()
 
     # --------------------------------------------------------
@@ -365,12 +465,47 @@ def create_adjacent_slice_file(
 
     statistics = {
         "file_name": input_path.name,
-        "input_shape": list(VOLUME_SHAPE),
-        "output_shape": list(OUTPUT_SHAPE),
-        "dtype": str(np.dtype(OUTPUT_DTYPE)),
-        "min": float(grouped.min()),
-        "max": float(grouped.max()),
-        "mean": float(grouped.mean()),
+
+        "plane": "XZ",
+
+        "adjacent_axis": "Y",
+
+        "input_shape": list(
+            VOLUME_SHAPE
+        ),
+
+        "output_shape": list(
+            OUTPUT_SHAPE
+        ),
+
+        "number_of_samples": (
+            NUM_XZ_SAMPLES
+        ),
+
+        "y_index_range": [
+            0,
+            Y_SIZE - 1,
+        ],
+
+        "boundary_handling": (
+            "replicate"
+        ),
+
+        "dtype": str(
+            np.dtype(OUTPUT_DTYPE)
+        ),
+
+        "min": float(
+            grouped.min()
+        ),
+
+        "max": float(
+            grouped.max()
+        ),
+
+        "mean": float(
+            grouped.mean()
+        ),
     }
 
     del grouped
@@ -390,13 +525,15 @@ def process_directory(
 ) -> list[dict]:
     """
     Convert every normalized LOW .bin file
-    in one directory.
+    into 3-adjacent X-Z slice data.
     """
 
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
 
-    files = get_bin_files(input_dir)
+    files = get_bin_files(
+        input_dir
+    )
 
     output_dir.mkdir(
         parents=True,
@@ -404,18 +541,62 @@ def process_directory(
     )
 
     print("\n" + "=" * 70)
+
     print(
-        f"CREATING 3-ADJACENT-SLICE LOW DATA: "
+        f"CREATING 3-ADJACENT X-Z LOW DATA: "
         f"{label}"
     )
+
     print("=" * 70)
 
-    print(f"Input       : {input_dir}")
-    print(f"Output      : {output_dir}")
-    print(f"Files       : {len(files)}")
-    print(f"Input shape : {VOLUME_SHAPE}")
-    print(f"Output shape: {OUTPUT_SHAPE}")
-    print(f"Dtype       : {np.dtype(OUTPUT_DTYPE)}")
+    print(
+        f"Input        : {input_dir}"
+    )
+
+    print(
+        f"Output       : {output_dir}"
+    )
+
+    print(
+        f"Files        : {len(files)}"
+    )
+
+    print(
+        f"Input shape  : {VOLUME_SHAPE}"
+    )
+
+    print(
+        "Input order  : [X, Y, Z]"
+    )
+
+    print(
+        "Plane        : X-Z"
+    )
+
+    print(
+        "Adjacent axis: Y"
+    )
+
+    print(
+        f"Output shape : {OUTPUT_SHAPE}"
+    )
+
+    print(
+        "Output order : [N, C, X, Z]"
+    )
+
+    print(
+        "Y range      : 0 ~ 199"
+    )
+
+    print(
+        "Boundary     : replicate padding"
+    )
+
+    print(
+        f"Dtype        : "
+        f"{np.dtype(OUTPUT_DTYPE)}"
+    )
 
     all_statistics = []
 
@@ -423,8 +604,10 @@ def process_directory(
         files,
         start=1,
     ):
+
         output_path = (
-            output_dir / input_path.name
+            output_dir
+            / input_path.name
         )
 
         print(
@@ -432,14 +615,18 @@ def process_directory(
             f"{input_path.name}"
         )
 
-        stats = create_adjacent_slice_file(
-            input_path=input_path,
-            output_path=output_path,
+        stats = (
+            create_adjacent_xz_slice_file(
+                input_path=input_path,
+                output_path=output_path,
+            )
         )
 
         stats["label"] = label
 
-        all_statistics.append(stats)
+        all_statistics.append(
+            stats
+        )
 
     return all_statistics
 
@@ -452,7 +639,7 @@ def verify_output_file(
     file_path: Path,
 ) -> None:
     """
-    Verify one generated adjacent-slice LOW file.
+    Verify one generated 3-adjacent X-Z LOW file.
     """
 
     file_path = Path(file_path)
@@ -469,14 +656,19 @@ def verify_output_file(
     expected_file_size = (
         HEADER_SIZE
         + expected_elements
-        * np.dtype(OUTPUT_DTYPE).itemsize
+        * np.dtype(
+            OUTPUT_DTYPE
+        ).itemsize
     )
 
     actual_file_size = (
         file_path.stat().st_size
     )
 
-    if actual_file_size != expected_file_size:
+    if (
+        actual_file_size
+        != expected_file_size
+    ):
         raise ValueError(
             f"Output verification failed.\n"
             f"File           : {file_path}\n"
@@ -494,31 +686,76 @@ def verify_output_file(
     )
 
     print("\n" + "=" * 70)
-    print("3-ADJACENT-SLICE LOW FILE VERIFICATION")
+
+    print(
+        "3-ADJACENT X-Z LOW FILE VERIFICATION"
+    )
+
     print("=" * 70)
 
-    print(f"File  : {file_path}")
-    print(f"Shape : {grouped.shape}")
-    print(f"Dtype : {grouped.dtype}")
-
-    print("\nGlobal statistics")
-    print(f"  Min  : {grouped.min():.6f}")
-    print(f"  Max  : {grouped.max():.6f}")
-    print(f"  Mean : {grouped.mean():.6f}")
-
-    print("\nBoundary structure")
-
     print(
-        "  depth 0   : "
-        "[slice 0, slice 0, slice 1]"
+        f"File  : {file_path}"
     )
 
     print(
-        "  depth 511 : "
-        "[slice 510, slice 511, slice 511]"
+        f"Shape : {grouped.shape}"
     )
 
-    print("\nExample sample shapes")
+    print(
+        f"Dtype : {grouped.dtype}"
+    )
+
+    print(
+        "\nGlobal statistics"
+    )
+
+    print(
+        f"  Min  : "
+        f"{grouped.min():.6f}"
+    )
+
+    print(
+        f"  Max  : "
+        f"{grouped.max():.6f}"
+    )
+
+    print(
+        f"  Mean : "
+        f"{grouped.mean():.6f}"
+    )
+
+    print(
+        "\nX-Z adjacent structure"
+    )
+
+    print(
+        "  Y = 0   : "
+        "[Y=0, Y=0, Y=1]"
+    )
+
+    print(
+        "  Y = 1   : "
+        "[Y=0, Y=1, Y=2]"
+    )
+
+    print(
+        "  Y = 100 : "
+        "[Y=99, Y=100, Y=101]"
+    )
+
+    print(
+        "  Y = 198 : "
+        "[Y=197, Y=198, Y=199]"
+    )
+
+    print(
+        "  Y = 199 : "
+        "[Y=198, Y=199, Y=199]"
+    )
+
+    print(
+        "\nExample sample shapes"
+    )
 
     print(
         f"  grouped[0].shape   : "
@@ -531,8 +768,8 @@ def verify_output_file(
     )
 
     print(
-        f"  grouped[511].shape : "
-        f"{grouped[511].shape}"
+        f"  grouped[199].shape : "
+        f"{grouped[199].shape}"
     )
 
     del grouped
@@ -544,67 +781,169 @@ def verify_output_file(
 
 def save_config() -> None:
     """
-    Save three-adjacent-slice LOW data settings.
+    Save 3-adjacent X-Z LOW data settings.
     """
 
     config = {
-        "method": "three_adjacent_low_slices",
+        "method": (
+            "three_adjacent_xz_low_slices"
+        ),
+
+        "plane": "XZ",
+
+        "adjacent_axis": "Y",
+
         "input_directories": {
             "train_low": str(
                 NORM_TRAIN_LOW_DIR
             ),
+
             "test_low": str(
                 NORM_TEST_LOW_DIR
             ),
         },
+
         "output_directories": {
             "train_low": str(
                 OUTPUT_TRAIN_LOW_DIR
             ),
+
             "test_low": str(
                 OUTPUT_TEST_LOW_DIR
             ),
         },
+
         "input_shape": list(
             VOLUME_SHAPE
         ),
-        "input_shape_order": "[H, W, D]",
+
+        "input_shape_order": (
+            "[X, Y, Z]"
+        ),
+
+        "xz_slice_shape": [
+            X_SIZE,
+            Z_SIZE,
+        ],
+
         "output_shape": list(
             OUTPUT_SHAPE
         ),
-        "output_shape_order": "[D, C, H, W]",
+
+        "output_shape_order": (
+            "[N, C, X, Z]"
+        ),
+
+        "number_of_samples_per_volume": (
+            NUM_XZ_SAMPLES
+        ),
+
+        "y_index_range": [
+            0,
+            Y_SIZE - 1,
+        ],
+
         "channels": {
-            "0": "previous_low_slice",
-            "1": "current_low_slice",
-            "2": "next_low_slice",
+            "0": (
+                "previous_y_xz_low_slice"
+            ),
+
+            "1": (
+                "current_y_xz_low_slice"
+            ),
+
+            "2": (
+                "next_y_xz_low_slice"
+            ),
         },
-        "boundary_handling": "replicate",
-        "header_size_bytes": HEADER_SIZE,
+
+        "boundary_handling": (
+            "replicate_padding"
+        ),
+
+        "boundary_examples": {
+            "y_0": [
+                0,
+                0,
+                1,
+            ],
+
+            "y_199": [
+                198,
+                199,
+                199,
+            ],
+        },
+
+        "header_size_bytes": (
+            HEADER_SIZE
+        ),
+
         "input_dtype": str(
             np.dtype(INPUT_DTYPE)
         ),
+
         "output_dtype": str(
             np.dtype(OUTPUT_DTYPE)
         ),
+
         "clipping": False,
+
         "normalization_changed": False,
+
         "common_scale_preserved": True,
+
         "high_data_duplicated": False,
+
+        "high_target_definition": (
+            "HIGH[:, y, :]"
+        ),
+
         "high_target_source": {
-            "train": "./data/norm_Train/HIGH",
-            "test": "./data/norm_Test/HIGH",
+            "train": (
+                "./data/norm_Train/HIGH"
+            ),
+
+            "test": (
+                "./data/norm_Test/HIGH"
+            ),
+        },
+
+        "map_visualization": {
+            "predicted_volume_shape": (
+                "[X, Y, Z] = "
+                "[200, 200, 512]"
+            ),
+
+            "output_plane": "XY",
+
+            "method": (
+                "Reconstruct predicted "
+                "X-Y-Z volume from all "
+                "200 predicted X-Z planes, "
+                "then perform maximum "
+                "projection over Z axis."
+            ),
+
+            "numpy_operation": (
+                "np.max("
+                "predicted_volume, "
+                "axis=2"
+                ")"
+            ),
         },
     }
 
     config_path = (
         DATA_ROOT
-        / "three_adjacent_low_slices_config.json"
+        / "three_adjacent_xz_low_slices_config.json"
     )
 
     with config_path.open(
         "w",
         encoding="utf-8",
     ) as f:
+
         json.dump(
             config,
             f,
@@ -613,7 +952,8 @@ def save_config() -> None:
         )
 
     print(
-        f"\nSaved config: {config_path}"
+        f"\nSaved config: "
+        f"{config_path}"
     )
 
 
@@ -624,8 +964,45 @@ def save_config() -> None:
 def main() -> None:
 
     print("\n" + "=" * 70)
-    print("PAM THREE ADJACENT LOW SLICES DATA CREATION")
+
+    print(
+        "PAM THREE ADJACENT X-Z "
+        "LOW SLICES DATA CREATION"
+    )
+
     print("=" * 70)
+
+    print(
+        "\nOriginal volume:"
+        "\n  Shape order = [X, Y, Z]"
+        "\n  Shape       = [200, 200, 512]"
+    )
+
+    print(
+        "\nTraining plane:"
+        "\n  X-Z plane"
+        "\n  Fixed Y index"
+    )
+
+    print(
+        "\nAdjacent structure:"
+        "\n  Channel 0 = X-Z plane at Y - 1"
+        "\n  Channel 1 = X-Z plane at Y"
+        "\n  Channel 2 = X-Z plane at Y + 1"
+    )
+
+    print(
+        "\nBoundary handling:"
+        "\n  Replicate padding"
+        "\n  Y=0   -> [0, 0, 1]"
+        "\n  Y=199 -> [198, 199, 199]"
+    )
+
+    print(
+        "\nAll X-Z planes are preserved:"
+        "\n  Y range = 0 ~ 199"
+        "\n  Total   = 200 samples per volume"
+    )
 
     print(
         "\nInput normalized LOW data:"
@@ -637,13 +1014,6 @@ def main() -> None:
         "\nOutput grouped LOW data:"
         f"\n  Train: {OUTPUT_TRAIN_LOW_DIR}"
         f"\n  Test : {OUTPUT_TEST_LOW_DIR}"
-    )
-
-    print(
-        "\nAdjacent-slice structure:"
-        "\n  Channel 0 = previous LOW slice"
-        "\n  Channel 1 = current LOW slice"
-        "\n  Channel 2 = next LOW slice"
     )
 
     # --------------------------------------------------------
@@ -673,7 +1043,7 @@ def main() -> None:
     save_config()
 
     # --------------------------------------------------------
-    # Verify first Train LOW output
+    # Verify first Train output
     # --------------------------------------------------------
 
     output_files = get_bin_files(
@@ -685,15 +1055,22 @@ def main() -> None:
     )
 
     print("\n" + "=" * 70)
-    print("3-ADJACENT LOW SLICE DATA CREATION COMPLETE")
+
+    print(
+        "3-ADJACENT X-Z LOW SLICE "
+        "DATA CREATION COMPLETE"
+    )
+
     print("=" * 70)
 
     print(
-        f"\nTrain output: {OUTPUT_TRAIN_LOW_DIR}"
+        f"\nTrain output: "
+        f"{OUTPUT_TRAIN_LOW_DIR}"
     )
 
     print(
-        f"Test output : {OUTPUT_TEST_LOW_DIR}"
+        f"Test output : "
+        f"{OUTPUT_TEST_LOW_DIR}"
     )
 
     print(
@@ -704,15 +1081,23 @@ def main() -> None:
 
     print(
         "\nImportant:"
-        "\n- Only LOW data is converted to 3 adjacent slices."
-        "\n- HIGH data is not duplicated."
-        "\n- Input normalized data remains unchanged."
+        "\n- Training plane is X-Z, not X-Y."
+        "\n- Adjacent context is taken along the Y axis."
+        "\n- All 200 X-Z planes are preserved."
+        "\n- Y=0 uses [0, 0, 1]."
+        "\n- Y=199 uses [198, 199, 199]."
+        "\n- Each volume produces 200 samples."
+        "\n- Each input sample shape is [3, 200, 512]."
+        "\n- HIGH target is HIGH[:, y, :]."
+        "\n- Output shape per file is [200, 3, 200, 512]."
+        "\n- Final predicted volume can be reconstructed "
+        "as [200, 200, 512]."
+        "\n- X-Y MAP can then be calculated with "
+        "np.max(predicted_volume, axis=2)."
         "\n- Common scale 2983.0 is preserved."
         "\n- No clipping is applied."
         "\n- Values greater than 1.0 are preserved."
         "\n- Output dtype is float32."
-        "\n- Output shape per file is [512, 3, 200, 200]."
-        "\n- Boundary handling uses replicate padding."
     )
 
 
