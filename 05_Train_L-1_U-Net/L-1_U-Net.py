@@ -89,8 +89,8 @@ LOG_EVERY = 20
 # U-Net
 # ------------------------------------------------------------
 
-BASE_CHANNELS = 16
-MAX_CHANNELS = 256
+BASE_CHANNELS = 8
+MAX_CHANNELS = 128
 
 # Input height 200 is not divisible by 16.
 # 200 -> pad to 208 -> 104 -> 52 -> 26 -> 13
