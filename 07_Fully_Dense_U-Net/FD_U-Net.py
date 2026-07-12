@@ -117,12 +117,12 @@ MAP_VOLUME_INDEX = 0
 MAP_BATCH_SIZE = 16
 SAVE_INITIAL_MAP = False
 
-MODEL_ROOT = Path("./05_Train_Vanilla_U-Net/models_enhancement")
+MODEL_ROOT = Path("./07_Fully_Dense_U-Net/models_enhancement")
 LATEST_MODEL_DIR = MODEL_ROOT / "latest"
 CHECKPOINT_DIR = MODEL_ROOT / "checkpoints"
 FINAL_MODEL_DIR = MODEL_ROOT / "final"
 
-OUTPUT_ROOT = Path("./05_Train_Vanilla_U-Net/outputs")
+OUTPUT_ROOT = Path("./07_Fully_Dense_U-Net/outputs")
 TRAIN_MAP_DIR = OUTPUT_ROOT / "train_maps"
 HISTORY_DIR = OUTPUT_ROOT / "history"
 
@@ -638,49 +638,155 @@ class EpochRandomXSliceSampler(Sampler[int]):
 # ============================================================
 
 
-class DoubleConv(nn.Module):
+class DenseLayer(nn.Module):
     """
-    Conv2d -> ReLU -> Conv2d -> ReLU
-    No BatchNorm.
+    One densely connected feature-producing layer.
+
+    Input:
+        [B, C_in, H, W]
+
+    Output:
+        [B, growth_rate, H, W]
+
+    BatchNorm is intentionally not used so that E1 changes only
+    the connectivity pattern relative to the Vanilla U-Net baseline.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        growth_rate: int,
+    ) -> None:
+        super().__init__()
+
+        self.conv = nn.Conv2d(
+            in_channels,
+            growth_rate,
+            kernel_size=3,
+            padding=1,
+            bias=True,
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.relu(self.conv(x))
+
+
+class DenseBlock(nn.Module):
+    """
+    Fully dense feature block.
+
+    Every internal layer receives the concatenation of all previous
+    features in the block:
+
+        x1 = H1([x0])
+        x2 = H2([x0, x1])
+        x3 = H3([x0, x1, x2])
+
+    After dense feature reuse, a 1x1 transition convolution compresses
+    the concatenated tensor to the requested out_channels.
+
+    This keeps the global U-Net channel schedule unchanged:
+
+        3 -> 8 -> 16 -> 32 -> 64 -> 128
     """
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
+        num_layers: int = 3,
+        growth_rate: int | None = None,
     ) -> None:
         super().__init__()
 
-        self.block = nn.Sequential(
-            nn.Conv2d(
-                in_channels,
-                out_channels,
-                kernel_size=3,
-                padding=1,
-                bias=True,
-            ),
-            nn.ReLU(inplace=True),
+        if num_layers <= 0:
+            raise ValueError(
+                f"num_layers must be > 0, got {num_layers}"
+            )
 
-            nn.Conv2d(
-                out_channels,
-                out_channels,
-                kernel_size=3,
-                padding=1,
-                bias=True,
-            ),
-            nn.ReLU(inplace=True),
+        if growth_rate is None:
+            # Balanced for the current lightweight 8-16-32-64-128 model.
+            # Example: out=64 -> growth=32.
+            growth_rate = max(4, out_channels // 2)
+
+        if growth_rate <= 0:
+            raise ValueError(
+                f"growth_rate must be > 0, got {growth_rate}"
+            )
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_layers = num_layers
+        self.growth_rate = growth_rate
+
+        self.layers = nn.ModuleList()
+
+        current_channels = in_channels
+
+        for _ in range(num_layers):
+            self.layers.append(
+                DenseLayer(
+                    in_channels=current_channels,
+                    growth_rate=growth_rate,
+                )
+            )
+
+            current_channels += growth_rate
+
+        # Compress all concatenated dense features to out_channels.
+        self.transition = nn.Conv2d(
+            current_channels,
+            out_channels,
+            kernel_size=1,
+            bias=True,
         )
+
+        self.transition_relu = nn.ReLU(inplace=True)
 
     def forward(
         self,
         x: torch.Tensor,
     ) -> torch.Tensor:
-        return self.block(x)
+        features: list[torch.Tensor] = [x]
+
+        for layer in self.layers:
+            dense_input = torch.cat(
+                features,
+                dim=1,
+            )
+
+            new_feature = layer(dense_input)
+            features.append(new_feature)
+
+        fused = torch.cat(
+            features,
+            dim=1,
+        )
+
+        output = self.transition(fused)
+        output = self.transition_relu(output)
+
+        return output
 
 
-class VanillaUNet(nn.Module):
+class FullyDenseUNet(nn.Module):
     """
-    3-adjacent Y-Z PAM enhancement U-Net.
+    E1 model: Fully Dense U-Net for 3-adjacent Y-Z PAM enhancement.
+
+    Relative to E0 Vanilla U-Net:
+      - Same input/output definition.
+      - Same 4-level encoder-decoder topology.
+      - Same channel schedule.
+      - Same MaxPool / ConvTranspose2d operations.
+      - Same skip concatenation.
+      - Same linear output layer.
+      - DoubleConv is replaced by DenseBlock at every encoder,
+        bottleneck, and decoder stage.
 
     Input:
         [B, 3, 200, 512]
@@ -702,8 +808,7 @@ class VanillaUNet(nn.Module):
         [B, 1, 200, 512]
 
     Final activation:
-        None
-        Linear output
+        None (linear output)
     """
 
     def __init__(
@@ -711,6 +816,7 @@ class VanillaUNet(nn.Module):
         in_channels: int = INPUT_CHANNELS,
         out_channels: int = OUTPUT_CHANNELS,
         base_channels: int = BASE_CHANNELS,
+        dense_layers_per_block: int = 3,
     ) -> None:
         super().__init__()
 
@@ -727,44 +833,61 @@ class VanillaUNet(nn.Module):
                 f"MAX_CHANNELS={MAX_CHANNELS}"
             )
 
-        self.encoder1 = DoubleConv(
+        self.dense_layers_per_block = dense_layers_per_block
+
+        # -------------------------
+        # Encoder
+        # -------------------------
+        self.encoder1 = DenseBlock(
             in_channels,
             c1,
+            num_layers=dense_layers_per_block,
         )
         self.pool1 = nn.MaxPool2d(2, 2)
 
-        self.encoder2 = DoubleConv(
+        self.encoder2 = DenseBlock(
             c1,
             c2,
+            num_layers=dense_layers_per_block,
         )
         self.pool2 = nn.MaxPool2d(2, 2)
 
-        self.encoder3 = DoubleConv(
+        self.encoder3 = DenseBlock(
             c2,
             c3,
+            num_layers=dense_layers_per_block,
         )
         self.pool3 = nn.MaxPool2d(2, 2)
 
-        self.encoder4 = DoubleConv(
+        self.encoder4 = DenseBlock(
             c3,
             c4,
+            num_layers=dense_layers_per_block,
         )
         self.pool4 = nn.MaxPool2d(2, 2)
 
-        self.bottleneck = DoubleConv(
+        # -------------------------
+        # Bottleneck
+        # -------------------------
+        self.bottleneck = DenseBlock(
             c4,
             c5,
+            num_layers=dense_layers_per_block,
         )
 
+        # -------------------------
+        # Decoder
+        # -------------------------
         self.upconv4 = nn.ConvTranspose2d(
             c5,
             c4,
             kernel_size=2,
             stride=2,
         )
-        self.decoder4 = DoubleConv(
+        self.decoder4 = DenseBlock(
             c4 + c4,
             c4,
+            num_layers=dense_layers_per_block,
         )
 
         self.upconv3 = nn.ConvTranspose2d(
@@ -773,9 +896,10 @@ class VanillaUNet(nn.Module):
             kernel_size=2,
             stride=2,
         )
-        self.decoder3 = DoubleConv(
+        self.decoder3 = DenseBlock(
             c3 + c3,
             c3,
+            num_layers=dense_layers_per_block,
         )
 
         self.upconv2 = nn.ConvTranspose2d(
@@ -784,9 +908,10 @@ class VanillaUNet(nn.Module):
             kernel_size=2,
             stride=2,
         )
-        self.decoder2 = DoubleConv(
+        self.decoder2 = DenseBlock(
             c2 + c2,
             c2,
+            num_layers=dense_layers_per_block,
         )
 
         self.upconv1 = nn.ConvTranspose2d(
@@ -795,12 +920,13 @@ class VanillaUNet(nn.Module):
             kernel_size=2,
             stride=2,
         )
-        self.decoder1 = DoubleConv(
+        self.decoder1 = DenseBlock(
             c1 + c1,
             c1,
+            num_layers=dense_layers_per_block,
         )
 
-        # Linear output.
+        # Linear output, identical to E0.
         self.output_conv = nn.Conv2d(
             c1,
             out_channels,
@@ -824,6 +950,7 @@ class VanillaUNet(nn.Module):
             mode="reflect",
         )
 
+        # Encoder
         e1 = self.encoder1(x)
         e2 = self.encoder2(
             self.pool1(e1)
@@ -835,10 +962,13 @@ class VanillaUNet(nn.Module):
             self.pool3(e3)
         )
 
+        # Bottleneck
         bottleneck = self.bottleneck(
             self.pool4(e4)
         )
 
+        # Decoder + standard E0 skip concatenation.
+        # AFF and BEFD denoising are intentionally NOT used in E1.
         d4 = self.upconv4(bottleneck)
         d4 = self.decoder4(
             torch.cat([d4, e4], dim=1)
@@ -1516,7 +1646,7 @@ def save_epoch_map(
 
     figure.suptitle(
         (
-            "Vanilla U-Net Train MAP | "
+            "Fully Dense U-Net Train MAP | "
             f"{volume_key} | "
             f"Epoch {epoch}"
         ),
@@ -1577,7 +1707,7 @@ def save_checkpoint(
 
         "train_loss": train_loss,
 
-        "model_name": "VanillaUNet",
+        "model_name": "FullyDenseUNet",
 
         "training_plane": "YZ",
 
@@ -1602,6 +1732,12 @@ def save_checkpoint(
         "base_channels": BASE_CHANNELS,
 
         "max_channels": MAX_CHANNELS,
+
+        "dense_layers_per_block": 3,
+
+        "dense_growth_rule": "max(4, out_channels // 2)",
+
+        "dense_transition": "1x1 Conv + ReLU",
 
         "physical_batch_size": BATCH_SIZE,
 
@@ -1698,7 +1834,7 @@ def save_loss_curve(
     plt.ylabel("Train L1 Loss")
 
     plt.title(
-        "Vanilla U-Net Training Loss"
+        "Fully Dense U-Net Training Loss"
     )
 
     plt.grid(True)
@@ -1786,7 +1922,7 @@ def train() -> None:
 
     print(
         "PAM 3-ADJACENT Y-Z "
-        "VANILLA U-NET TRAINING"
+        "FULLY DENSE U-NET TRAINING"
     )
 
     print(
@@ -1891,7 +2027,7 @@ def train() -> None:
         f"{PREFETCH_FACTOR if NUM_WORKERS > 0 else 'N/A'}"
     )
 
-    model = VanillaUNet(
+    model = FullyDenseUNet(
         in_channels=INPUT_CHANNELS,
         out_channels=OUTPUT_CHANNELS,
         base_channels=BASE_CHANNELS,
@@ -1913,7 +2049,7 @@ def train() -> None:
 
     print(
         "  Architecture           : "
-        "Vanilla U-Net"
+        "Fully Dense U-Net (E1)"
     )
 
     print(
@@ -1934,6 +2070,10 @@ def train() -> None:
     print(
         f"  Parameters             : "
         f"{parameter_count:,}"
+    )
+
+    print(
+        "  Dense layers/block     : 3"
     )
 
     print(
