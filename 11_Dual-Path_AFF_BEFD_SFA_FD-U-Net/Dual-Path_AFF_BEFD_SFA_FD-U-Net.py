@@ -254,12 +254,12 @@ MAP_VOLUME_INDEX = 0
 MAP_BATCH_SIZE = 16
 SAVE_INITIAL_MAP = False
 
-MODEL_ROOT = Path("./10_Train_Dual_Path_Fully_Dense_SFA_BEFD_AFF_U-Net/models_enhancement")
+MODEL_ROOT = Path("./11_Dual-Path_AFF_BEFD_SFA_FD-U-Net/models_enhancement")
 LATEST_MODEL_DIR = MODEL_ROOT / "latest"
 CHECKPOINT_DIR = MODEL_ROOT / "checkpoints"
 FINAL_MODEL_DIR = MODEL_ROOT / "final"
 
-OUTPUT_ROOT = Path("./10_Train_Dual_Path_Fully_Dense_SFA_BEFD_AFF_U-Net/outputs")
+OUTPUT_ROOT = Path("./11_Dual-Path_AFF_BEFD_SFA_FD-U-Net/outputs")
 TRAIN_MAP_DIR = OUTPUT_ROOT / "train_maps"
 HISTORY_DIR = OUTPUT_ROOT / "history"
 
