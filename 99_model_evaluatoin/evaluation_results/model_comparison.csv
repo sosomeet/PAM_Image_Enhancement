@@ -1,3 +1,0 @@
-﻿model_key,model_name,model_class,num_volumes,mean_l1,mean_mse,mean_psnr,mean_ssim,highest_ssim_volume,highest_ssim,lowest_ssim_volume,lowest_ssim,checkpoint
-yz_3d,Y-Z 3-Adjacent U-Net,VanillaUNet,45,0.019435462149514093,0.00292654720014996,26.268339365312926,0.8080955763922797,Test_022,0.8418511223793029,Test_023,0.7728978729248047,D:\University\4-1.5\BOA_lab\Week2_260706_0712\PAM_Image_Enhancement\06_Y-Z_3D_U-Net\models_enhancement\final\model_final.pth
-fd,Fully Dense U-Net,FullyDenseUNet,45,0.01938094065560235,0.0029093585712379887,26.28492955928244,0.80846050368415,Test_038,0.8426028490066528,Test_023,0.7726777124404908,D:\University\4-1.5\BOA_lab\Week2_260706_0712\PAM_Image_Enhancement\07_Fully_Dense_U-Net\models_enhancement\final\model_final.pth
