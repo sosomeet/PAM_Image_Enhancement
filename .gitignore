@@ -4,3 +4,5 @@ models/
 *.pth
 *.hwp
 *.png
+*__pycache__/
+*.json
