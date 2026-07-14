@@ -1,0 +1,2 @@
+﻿model_key,model_name,model_class,num_volumes,mean_l1,mean_mse,mean_psnr,mean_ssim,highest_ssim_volume,highest_ssim,lowest_ssim_volume,lowest_ssim,checkpoint
+residual_edge_wavelet_multistage,Residual + Edge + Wavelet + Multi-Stage U-Net,E9ResidualEdgeWaveletMultiStageNet,45,0.019661177775065104,0.0030406038625041642,26.238130521536657,0.8109190713564557,Test_022,0.8445488834381103,Test_023,0.7717360472679138,D:\University\4-1.5\BOA_lab\Week2_260706_0712\PAM_Image_Enhancement\12_Residual_Edge_Wavelet_MultiStage\models_enhancement\final\model_final.pth

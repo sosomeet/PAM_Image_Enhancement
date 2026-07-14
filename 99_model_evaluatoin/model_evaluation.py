@@ -10,18 +10,14 @@ PAM_Image_Enhancement/
 │  │  └─ LOW/        # float32, [X, C, Y, Z] = [200, 3, 200, 512]
 │  └─ norm_Test/
 │     └─ HIGH/       # float32, [X, Y, Z] = [200, 200, 512]
-├─ 06_Y-Z_3D_U-Net/
-├─ 07_Fully_Dense_U-Net/
-├─ 08_SFA_FD-U-Net/
-├─ 09_BEFD_SFA_FD-U-Net/
-├─ 10_Dual-Path_BEFD_SFA_FD-U-Net/
 ├─ 11_Dual-Path_AFF_BEFD_SFA_FD-U-Net/
+├─ 12_Residual_Edge_Wavelet_MultiStage/
 └─ 99_model_evaluatoin/
    └─ model_evaluation.py
 
 Important
 ---------
-- 05_Vanilla_U-Net is intentionally excluded.
+- Only experiment folders 11 and 12 are evaluated.
 - LOW test data is read from data/3d_Test/LOW.
 - HIGH target data is read from data/norm_Test/HIGH.
 - LOW files are already pre-generated 3-adjacent Y-Z inputs.
@@ -36,7 +32,7 @@ Important
 
 from __future__ import annotations
 
-EVALUATOR_VERSION = "2026-07-13-v3-no-vanilla-ssim-extremes-cw90"
+EVALUATOR_VERSION = "2026-07-14-v4-folders-11-12-only-ssim-extremes-cw90"
 
 
 import argparse
@@ -117,81 +113,39 @@ PSNR_SSIM_DATA_RANGE = 1.0
 # =============================================================================
 
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
-    # "yz_3d": {
-    #     "display_name": "Y-Z 3-Adjacent U-Net",
-    #     "folder": "06_Y-Z_3D_U-Net",
-    #     "model_file": "Y-Z_3D_U-Net.py",
-    #     "class_candidates": [
-    #         "VanillaUNet",
-    #         "YZ3DUNet",
-    #         "UNetEnhancer",
-    #         "UNet",
-    #         "Model",
-    #     ],
-    #     "init_kwargs": {},
-    # },
-    # "fd": {
-    #     "display_name": "Fully Dense U-Net",
-    #     "folder": "07_Fully_Dense_U-Net",
-    #     "model_file": "FD_U-Net.py",
-    #     "class_candidates": [
-    #         "FullyDenseUNet",
-    #         "FDUNet",
-    #         "UNet",
-    #         "Model",
-    #     ],
-    #     "init_kwargs": {},
-    # },
-    # "sfa_fd": {
-    #     "display_name": "SFA Fully Dense U-Net",
-    #     "folder": "08_SFA_FD-U-Net",
-    #     "model_file": "SFA_FD-U-Net.py",
-    #     "class_candidates": [
-    #         "FullyDenseSFAUNet",
-    #         "SFAFDUNet",
-    #         "FullyDenseUNet",
-    #         "UNet",
-    #         "Model",
-    #     ],
-    #     "init_kwargs": {},
-    # },
-    # "befd_sfa_fd": {
-    #     "display_name": "BEFD + SFA + Fully Dense U-Net",
-    #     "folder": "09_BEFD_SFA_FD-U-Net",
-    #     "model_file": "BEFD_SFA_FD-U-Net.py",
-    #     "class_candidates": [
-    #         "FullyDenseSFABEFDUNet",
-    #         "BEFDFullyDenseSFAUNet",
-    #         "BEFDSFAFDUNet",
-    #         "FullyDenseSFAUNet",
-    #         "UNet",
-    #         "Model",
-    #     ],
-    #     "init_kwargs": {},
-    # },
-    # "dual_befd_sfa_fd": {
-    #     "display_name": "Dual-Path + BEFD + SFA + Fully Dense U-Net",
-    #     "folder": "10_Dual-Path_BEFD_SFA_FD-U-Net",
-    #     "model_file": "Dual-Path_BEFD_SFA_FD-U-Net.py",
-    #     "class_candidates": [
-    #         "DualPathBEFDSFAFDUNet",
-    #         "DualPathFullyDenseSFABEFDUNet",
-    #         "BEFDSFAFDUNet",
-    #         "FullyDenseSFAUNet",
-    #         "UNet",
-    #         "Model",
-    #     ],
-    #     "init_kwargs": {},
-    # },
     "dual_aff_befd_sfa_fd": {
         "display_name": "Dual-Path + AFF + BEFD + SFA + Fully Dense U-Net",
         "folder": "11_Dual-Path_AFF_BEFD_SFA_FD-U-Net",
-        "model_file": "Dual-Path_AFF_BEFD_SFA_FD-U-Net.py",
+
+        # None = automatically discover the model .py file recursively.
+        # This is safer than hard-coding the file name.
+        "model_file": None,
+
         "class_candidates": [
             "DualPathAFFBEFDSFAFDUNet",
             "DualPathAFFFullyDenseSFABEFDUNet",
             "DualPathBEFDSFAFDUNet",
             "BEFDSFAFDUNet",
+            "FullyDenseSFAUNet",
+            "UNet",
+            "Model",
+        ],
+        "init_kwargs": {},
+    },
+
+    "residual_edge_wavelet_multistage": {
+        "display_name": "Residual + Edge + Wavelet + Multi-Stage U-Net",
+        "folder": "12_Residual_Edge_Wavelet_MultiStage",
+
+        # None = automatically discover the model .py file recursively.
+        "model_file": None,
+
+        "class_candidates": [
+            "ResidualEdgeWaveletMultiStageUNet",
+            "ResidualEdgeWaveletMultiStageNet",
+            "ResidualEdgeWaveletUNet",
+            "ResidualMultiStageUNet",
+            "ResidualUNet",
             "UNet",
             "Model",
         ],
@@ -522,6 +476,11 @@ def architecture_score(cls: type[nn.Module]) -> int:
         "befd": 20,
         "sfa": 20,
         "aff": 20,
+        "residual": 30,
+        "edge": 20,
+        "wavelet": 30,
+        "multistage": 30,
+        "multi_stage": 30,
     }
 
     negative_tokens = {
@@ -1628,8 +1587,8 @@ def evaluate_model(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate PAM Y-Z 3-adjacent enhancement models. "
-            "05_Vanilla_U-Net is intentionally excluded."
+            "Evaluate PAM Y-Z 3-adjacent enhancement models "
+            "from experiment folders 11 and 12 only."
         )
     )
 
@@ -1775,7 +1734,7 @@ def main() -> None:
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
 
     print("=" * 88)
-    print("PAM MULTI-MODEL EVALUATION — SSIM EXTREMES ONLY")
+    print("PAM MODEL EVALUATION — FOLDERS 11 AND 12 ONLY — SSIM EXTREMES")
     print("=" * 88)
     print(f"Project root     : {PROJECT_ROOT}")
     print(f"Test LOW         : {TEST_LOW_DIR}")
