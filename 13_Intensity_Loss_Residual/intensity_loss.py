@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-E9.1 PAM intensity-aware image enhancement training script.
+.1 PAM intensity-aware image enhancement training script.
 
 Completely new architecture (not an extension of E5):
 
@@ -149,7 +149,7 @@ class ModelConfig:
         self.detail_gate_bias_init = float(detail_gate_bias_init)
         self.refine_gate_bias_init = float(refine_gate_bias_init)
 
-        # Ablation controls. Keep all True for full E9.
+        # Ablation controls. Keep all True for full .
         self.use_edge_branch = bool(use_edge_branch)
         self.use_wavelet_branch = bool(use_wavelet_branch)
         self.use_stage2 = bool(use_stage2)
@@ -179,7 +179,7 @@ class TrainConfig:
         self.log_every = 20
 
         # ------------------------------------------------------------
-        # E9.1 intensity-aware composite loss
+        # .1 intensity-aware composite loss
         #
         # Final-stage weights are normalized to 1.0:
         #   20% L1
@@ -188,7 +188,7 @@ class TrainConfig:
         #   20% target-weighted intensity L1
         #    5% weighted intensity-statistics loss
         #
-        # Compared with E9, SSIM is still the largest single term, but the
+        # Compared with , SSIM is still the largest single term, but the
         # objective now provides substantially stronger supervision for PAM
         # signal amplitude and bright-vessel intensity.
         # ------------------------------------------------------------
@@ -1001,7 +1001,7 @@ class HaarDWT(nn.Module):
 
 
 # ============================================================
-# 7. E9 architecture branches
+# 7. architecture branches
 # ============================================================
 
 
@@ -1325,13 +1325,13 @@ class FullResolutionDetailRefiner(nn.Module):
 
 
 # ============================================================
-# 8. Full E9 model
+# 8. Full model
 # ============================================================
 
 
-class E9ResidualEdgeWaveletMultiStageNet(nn.Module):
+class ResidualEdgeWaveletMultiStageNet(nn.Module):
     """
-    E9: Residual Edge-Wavelet Multi-Stage PAM Enhancement Network.
+    : Residual Edge-Wavelet Multi-Stage PAM Enhancement Network.
 
     Input:
         [B,3,H,W]
@@ -1363,13 +1363,13 @@ class E9ResidualEdgeWaveletMultiStageNet(nn.Module):
 
         if in_channels != 3:
             raise ValueError(
-                "E9 currently expects exactly 3 adjacent input channels. "
+                "currently expects exactly 3 adjacent input channels. "
                 f"Got {in_channels}."
             )
 
         if out_channels != 1:
             raise ValueError(
-                "E9 currently expects one output channel. "
+                "currently expects one output channel. "
                 f"Got {out_channels}."
             )
 
@@ -1563,7 +1563,7 @@ class E9ResidualEdgeWaveletMultiStageNet(nn.Module):
         expected_shape = (original_height, original_width)
         if final.shape[-2:] != expected_shape:
             raise RuntimeError(
-                f"E9 output spatial shape mismatch: "
+                f"output spatial shape mismatch: "
                 f"{tuple(final.shape[-2:])} != {expected_shape}"
             )
 
@@ -1589,9 +1589,9 @@ class E9ResidualEdgeWaveletMultiStageNet(nn.Module):
 
 
 # Convenient aliases for dynamic evaluators.
-E9PAMEnhancer = E9ResidualEdgeWaveletMultiStageNet
-UNet = E9ResidualEdgeWaveletMultiStageNet
-Model = E9ResidualEdgeWaveletMultiStageNet
+PAMEnhancer = ResidualEdgeWaveletMultiStageNet
+UNet = ResidualEdgeWaveletMultiStageNet
+Model = ResidualEdgeWaveletMultiStageNet
 
 
 # ============================================================
@@ -1952,7 +1952,7 @@ class IntensityStatisticsLoss(nn.Module):
 
 class MultiStageStructureLoss(nn.Module):
     """
-    E9.1 intensity-aware structure-preserving PAM loss.
+    .1 intensity-aware structure-preserving PAM loss.
 
     Final-stage objective:
         0.20 * L1
@@ -2303,7 +2303,7 @@ def save_training_map(
         fig.colorbar(rendered, ax=axis, fraction=0.046, pad=0.04)
 
     fig.suptitle(
-        f"E9.1 PAM Intensity-Aware Enhancement | Epoch {epoch:03d} | 90° clockwise"
+        f".1 PAM Intensity-Aware Enhancement | Epoch {epoch:03d} | 90° clockwise"
     )
     fig.tight_layout()
 
@@ -2338,7 +2338,7 @@ def count_parameters(model: nn.Module) -> tuple[int, int]:
 
 def model_metadata(samples_per_epoch: int) -> dict[str, Any]:
     return {
-        "architecture": "E9ResidualEdgeWaveletMultiStageNet",
+        "architecture": "ResidualEdgeWaveletMultiStageNet",
         "input_shape": list(INPUT_SAMPLE_SHAPE),
         "target_shape": list(TARGET_SAMPLE_SHAPE),
         "data_low_shape": list(DATA.adjacent_low_shape),
@@ -2495,7 +2495,7 @@ def save_loss_curve(history: list[HistoryRow]) -> None:
     )
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title("E9.1 PAM Intensity-Aware Structure-Preserving Training Loss")
+    plt.title(".1 PAM Intensity-Aware Structure-Preserving Training Loss")
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
@@ -2512,7 +2512,7 @@ def save_loss_curve(history: list[HistoryRow]) -> None:
 def run_model_smoke_test(device: torch.device) -> None:
     """Fast shape/finite-value test before touching the full dataset."""
 
-    model = E9ResidualEdgeWaveletMultiStageNet(
+    model = ResidualEdgeWaveletMultiStageNet(
         in_channels=MODEL.in_channels,
         out_channels=MODEL.out_channels,
         base_channels=MODEL.base_channels,
@@ -2583,7 +2583,7 @@ def train() -> None:
     )
 
     print("=" * 92)
-    print("E9.1 PAM ENHANCEMENT — INTENSITY-AWARE RESIDUAL + EDGE + WAVELET + 2-STAGE")
+    print(".1 PAM ENHANCEMENT — INTENSITY-AWARE RESIDUAL + EDGE + WAVELET + 2-STAGE")
     print("=" * 92)
     print(f"Device                    : {device}")
     if device.type == "cuda":
@@ -2658,8 +2658,8 @@ def train() -> None:
     print(f"      Samples/epoch       : {samples_per_epoch:,}")
     print(f"      Batches/epoch       : {len(loader):,}")
 
-    print("\n[3/5] Building E9.1 model...")
-    model = E9ResidualEdgeWaveletMultiStageNet(
+    print("\n[3/5] Building .1 model...")
+    model = ResidualEdgeWaveletMultiStageNet(
         in_channels=MODEL.in_channels,
         out_channels=MODEL.out_channels,
         base_channels=MODEL.base_channels,

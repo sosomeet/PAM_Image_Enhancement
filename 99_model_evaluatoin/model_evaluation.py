@@ -11,13 +11,13 @@ PAM_Image_Enhancement/
 │  └─ norm_Test/
 │     └─ HIGH/       # float32, [X, Y, Z] = [200, 200, 512]
 ├─ 11_Dual-Path_AFF_BEFD_SFA_FD-U-Net/
-├─ 12_Residual_Edge_Wavelet_MultiStage/
+├─ 13_Residual_Edge_Wavelet_IntensityAware_MultiStage/
 └─ 99_model_evaluatoin/
    └─ model_evaluation.py
 
 Important
 ---------
-- Only experiment folders 11 and 12 are evaluated.
+- Only experiment folders 11 and 13 are evaluated.
 - LOW test data is read from data/3d_Test/LOW.
 - HIGH target data is read from data/norm_Test/HIGH.
 - LOW files are already pre-generated 3-adjacent Y-Z inputs.
@@ -32,7 +32,7 @@ Important
 
 from __future__ import annotations
 
-EVALUATOR_VERSION = "2026-07-14-v4-folders-11-12-only-ssim-extremes-cw90"
+EVALUATOR_VERSION = "2026-07-18-v5-folders-11-13-only-ssim-extremes-cw90"
 
 
 import argparse
@@ -133,14 +133,18 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "init_kwargs": {},
     },
 
-    "residual_edge_wavelet_multistage": {
-        "display_name": "Residual + Edge + Wavelet + Multi-Stage U-Net",
-        "folder": "12_Residual_Edge_Wavelet_MultiStage",
+    "intensity_aware_residual_edge_wavelet_multistage": {
+        "display_name": (
+            "E9.1 Intensity-Aware Residual + Edge + Wavelet "
+            "+ Multi-Stage Network"
+        ),
+        "folder": "13_Intensity_Loss_Residual",
 
         # None = automatically discover the model .py file recursively.
         "model_file": None,
 
         "class_candidates": [
+            "E9ResidualEdgeWaveletMultiStageNet",
             "ResidualEdgeWaveletMultiStageUNet",
             "ResidualEdgeWaveletMultiStageNet",
             "ResidualEdgeWaveletUNet",
@@ -1588,7 +1592,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate PAM Y-Z 3-adjacent enhancement models "
-            "from experiment folders 11 and 12 only."
+            "from experiment folders 11 and 13 only."
         )
     )
 
@@ -1734,7 +1738,7 @@ def main() -> None:
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
 
     print("=" * 88)
-    print("PAM MODEL EVALUATION — FOLDERS 11 AND 12 ONLY — SSIM EXTREMES")
+    print("PAM MODEL EVALUATION — FOLDERS 11 AND 13 ONLY — SSIM EXTREMES")
     print("=" * 88)
     print(f"Project root     : {PROJECT_ROOT}")
     print(f"Test LOW         : {TEST_LOW_DIR}")
