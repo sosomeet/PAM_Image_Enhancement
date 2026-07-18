@@ -11,7 +11,7 @@ PAM_Image_Enhancement/
 │  └─ norm_Test/
 │     └─ HIGH/       # float32, [X, Y, Z] = [200, 200, 512]
 ├─ 11_Dual-Path_AFF_BEFD_SFA_FD-U-Net/
-├─ 13_Residual_Edge_Wavelet_IntensityAware_MultiStage/
+├─ 13_Residual_Edge_Wavelet_Intensity/
 └─ 99_model_evaluatoin/
    └─ model_evaluation.py
 
@@ -22,8 +22,10 @@ Important
 - HIGH target data is read from data/norm_Test/HIGH.
 - LOW files are already pre-generated 3-adjacent Y-Z inputs.
   Therefore, this evaluator DOES NOT create X-1/X/X+1 channels again.
-- Y-Z MAP is created by reconstructing prediction [X,Y,Z]
-  and applying np.max(volume, axis=0), producing [Y,Z].
+- X-Y MAP is created by reconstructing prediction [X,Y,Z]
+  and applying np.max(volume, axis=2), producing [X,Y].
+- L1, MSE, PSNR, and SSIM are calculated from the X-Y MAP,
+  not from individual Y-Z slices.
 - For each model, PNG images are generated only for the test volume with
   the highest SSIM and the test volume with the lowest SSIM.
 - Both MAP and slice figures are displayed after a 90-degree clockwise rotation.
@@ -32,7 +34,7 @@ Important
 
 from __future__ import annotations
 
-EVALUATOR_VERSION = "2026-07-18-v5-folders-11-13-only-ssim-extremes-cw90"
+EVALUATOR_VERSION = "2026-07-18-v7-xy-map-metrics-import-fix"
 
 
 import argparse
@@ -43,6 +45,7 @@ import json
 import math
 import re
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -437,21 +440,49 @@ def discover_model_file(
 
 
 def import_module_from_path(module_path: Path, registry_key: str):
-    module_name = f"pam_eval_{registry_key}_{abs(hash(str(module_path)))}"
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    """
+    Import a model file as a real Python module.
+
+    The module must be registered in sys.modules before exec_module().
+    Otherwise decorators such as @dataclass may fail while resolving
+    cls.__module__, producing:
+
+        AttributeError: 'NoneType' object has no attribute '__dict__'
+    """
+    resolved_path = module_path.resolve()
+    module_name = (
+        f"pam_eval_{registry_key}_"
+        f"{abs(hash(str(resolved_path)))}"
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        resolved_path,
+    )
 
     if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot create import spec for: {module_path}")
+        raise ImportError(
+            f"Cannot create import spec for: {resolved_path}"
+        )
 
     module = importlib.util.module_from_spec(spec)
 
-    # Support local sibling imports inside a model folder.
-    sys.path.insert(0, str(module_path.parent))
+    # Required for @dataclass and other decorators that inspect
+    # sys.modules[cls.__module__] during module execution.
+    sys.modules[module_name] = module
+
+    model_dir = str(resolved_path.parent)
+    sys.path.insert(0, model_dir)
+
     try:
         spec.loader.exec_module(module)
+    except Exception:
+        # Prevent a partially initialized module from remaining cached.
+        sys.modules.pop(module_name, None)
+        raise
     finally:
         try:
-            sys.path.remove(str(module_path.parent))
+            sys.path.remove(model_dir)
         except ValueError:
             pass
 
@@ -981,7 +1012,7 @@ def robust_limits(
     return v_min, v_max
 
 
-def save_yz_map_figure(
+def save_xy_map_figure(
     low_center_volume: np.ndarray,
     high_volume: np.ndarray,
     prediction_volume: np.ndarray,
@@ -991,24 +1022,24 @@ def save_yz_map_figure(
     """
     All input volumes are [X,Y,Z].
 
-    Y-Z MAP:
-        max projection along X
-        np.max(volume, axis=0)
-        -> [Y,Z]
+    X-Y MAP:
+        maximum projection along Z
+        np.max(volume, axis=2)
+        -> [X,Y]
 
     Display:
         Every MAP image is rotated 90 degrees clockwise.
-        np.rot90(image, k=-1)
+        Metric calculation is performed before this display rotation.
 
     Panel order:
         LOW -> Prediction -> HIGH -> Absolute Error
     """
-    low_map = np.max(low_center_volume, axis=0)
-    high_map = np.max(high_volume, axis=0)
-    prediction_map = np.max(prediction_volume, axis=0)
+    low_map = np.max(low_center_volume, axis=2)
+    high_map = np.max(high_volume, axis=2)
+    prediction_map = np.max(prediction_volume, axis=2)
     error_map = np.abs(high_map - prediction_map)
 
-    # Rotate every MAP 90 degrees clockwise for display.
+    # Keep the previous clockwise display convention.
     low_map = np.rot90(low_map, k=-1)
     prediction_map = np.rot90(prediction_map, k=-1)
     high_map = np.rot90(high_map, k=-1)
@@ -1022,21 +1053,21 @@ def save_yz_map_figure(
     if error_max <= 0:
         error_max = 1e-8
 
-    fig, axes = plt.subplots(1, 4, figsize=(22, 10))
+    fig, axes = plt.subplots(1, 4, figsize=(18, 8))
 
     panels = [
-        (low_map, "LOW Y-Z MAP", "hot", v_min, v_max),
+        (low_map, "LOW X-Y MAP", "hot", v_min, v_max),
         (
             prediction_map,
-            "Prediction Y-Z MAP",
+            "Prediction X-Y MAP",
             "hot",
             v_min,
             v_max,
         ),
-        (high_map, "HIGH Y-Z MAP", "hot", v_min, v_max),
+        (high_map, "HIGH X-Y MAP", "hot", v_min, v_max),
         (
             error_map,
-            "Absolute Error Y-Z MAP",
+            "Absolute Error X-Y MAP",
             "viridis",
             0.0,
             error_max,
@@ -1048,19 +1079,24 @@ def save_yz_map_figure(
             image,
             cmap=cmap,
             origin="upper",
-            aspect="auto",
+            aspect="equal",
             vmin=p_min,
             vmax=p_max,
         )
         axis.set_title(panel_title)
-        # Original [Y,Z] becomes [Z,Y] after clockwise rotation.
-        # Therefore the displayed horizontal axis corresponds to Y,
-        # and the displayed vertical axis corresponds to Z.
-        axis.set_xlabel("Y")
-        axis.set_ylabel("Z")
-        fig.colorbar(rendered, ax=axis, fraction=0.046, pad=0.04)
 
-    fig.suptitle(title + " | MAP rotated 90° clockwise")
+        # Original [X,Y] becomes [Y,X] after clockwise rotation.
+        axis.set_xlabel("X")
+        axis.set_ylabel("Y")
+
+        fig.colorbar(
+            rendered,
+            ax=axis,
+            fraction=0.046,
+            pad=0.04,
+        )
+
+    fig.suptitle(title + " | X-Y MAP rotated 90° clockwise")
     fig.tight_layout()
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1154,16 +1190,21 @@ def evaluate_single_volume(
     save_prediction_output: bool = True,
 ) -> dict[str, Any]:
     """
-    Evaluate one [X,Y,Z] test volume.
+    Evaluate one test volume.
 
-    Normal evaluation pass:
-        save_visualization=False
-        -> metrics are calculated without reconstructing a full CPU prediction
-           volume unless --save-prediction-volume is enabled.
+    Inference:
+        The model processes X-indexed Y-Z samples:
+        input  [3,Y,Z] -> prediction [1,Y,Z].
 
-    SSIM-extreme visualization pass:
-        save_visualization=True
-        -> reconstruct the full prediction volume and save MAP/slice figures.
+    Volume reconstruction:
+        All predictions are assembled into [X,Y,Z].
+
+    Metric plane:
+        X-Y MAP = max projection over Z.
+        L1, MSE, PSNR, and SSIM are calculated only on this X-Y MAP.
+
+    SSIM-extreme selection:
+        Highest and lowest samples are selected using per-volume X-Y MAP SSIM.
     """
     dataset = PAMAdjacentYZTestDataset(
         low_path=pair["low_path"],
@@ -1185,26 +1226,11 @@ def evaluate_single_volume(
 
     loader = DataLoader(**loader_kwargs)
 
-    need_prediction_volume = (
-        save_visualization
-        or (config.save_prediction_volume and save_prediction_output)
+    # X-Y MAP metrics require the complete reconstructed [X,Y,Z] prediction.
+    prediction_volume = np.empty(
+        HIGH_VOLUME_SHAPE,
+        dtype=np.float32,
     )
-
-    prediction_volume: Optional[np.ndarray]
-    if need_prediction_volume:
-        prediction_volume = np.empty(
-            HIGH_VOLUME_SHAPE,
-            dtype=np.float32,
-        )
-    else:
-        prediction_volume = None
-
-    absolute_error_sum = 0.0
-    squared_error_sum = 0.0
-    element_count = 0
-
-    ssim_sum = 0.0
-    slice_count = 0
 
     amp_enabled = config.use_amp and device.type == "cuda"
 
@@ -1252,72 +1278,81 @@ def evaluate_single_volume(
                         align_corners=False,
                     )
 
-                # Do NOT clamp. These models use linear output.
-                diff = predictions - targets
+            batch_predictions = (
+                predictions[:, 0]
+                .float()
+                .cpu()
+                .numpy()
+            )
 
-                batch_absolute_error = diff.abs().sum()
-                batch_squared_error = diff.square().sum()
+            x_indices = batch["x_index"]
+            if isinstance(x_indices, torch.Tensor):
+                x_indices = x_indices.tolist()
 
-                batch_ssim = calculate_ssim_per_sample(
-                    predictions.float(),
-                    targets.float(),
+            for local_index, x_index in enumerate(x_indices):
+                prediction_volume[int(x_index)] = (
+                    batch_predictions[local_index]
                 )
 
-            absolute_error_sum += float(batch_absolute_error.item())
-            squared_error_sum += float(batch_squared_error.item())
-            element_count += int(targets.numel())
+    low_center_volume = dataset.get_low_center_volume()
+    high_volume = dataset.get_high_volume()
 
-            ssim_sum += float(batch_ssim.sum().item())
-            slice_count += int(targets.shape[0])
+    # --------------------------------------------------------------
+    # X-Y MAP evaluation: [X,Y,Z] --max over Z--> [X,Y]
+    # --------------------------------------------------------------
+    prediction_xy_map = np.max(prediction_volume, axis=2)
+    high_xy_map = np.max(high_volume, axis=2)
 
-            if prediction_volume is not None:
-                batch_predictions = (
-                    predictions[:, 0]
-                    .float()
-                    .cpu()
-                    .numpy()
-                )
+    difference = (
+        prediction_xy_map.astype(np.float64)
+        - high_xy_map.astype(np.float64)
+    )
 
-                x_indices = batch["x_index"]
-                if isinstance(x_indices, torch.Tensor):
-                    x_indices = x_indices.tolist()
-
-                for local_index, x_index in enumerate(x_indices):
-                    prediction_volume[int(x_index)] = (
-                        batch_predictions[local_index]
-                    )
-
-    l1 = absolute_error_sum / element_count
-    mse = squared_error_sum / element_count
+    l1 = float(np.mean(np.abs(difference)))
+    mse = float(np.mean(np.square(difference)))
     psnr = calculate_psnr_from_mse(mse)
-    ssim = ssim_sum / slice_count
+
+    prediction_map_tensor = torch.from_numpy(
+        prediction_xy_map
+    ).unsqueeze(0).unsqueeze(0).to(
+        device=device,
+        dtype=torch.float32,
+    )
+
+    high_map_tensor = torch.from_numpy(
+        high_xy_map
+    ).unsqueeze(0).unsqueeze(0).to(
+        device=device,
+        dtype=torch.float32,
+    )
+
+    with torch.inference_mode():
+        ssim = float(
+            calculate_ssim_per_sample(
+                prediction_map_tensor,
+                high_map_tensor,
+            ).item()
+        )
 
     volume_key = pair["volume_key"]
 
     if save_visualization:
-        if prediction_volume is None:
-            raise RuntimeError(
-                "prediction_volume was not reconstructed for visualization."
-            )
-
         label = visualization_label or "visualization"
         volume_dir = model_result_dir / label / volume_key
         volume_dir.mkdir(parents=True, exist_ok=True)
 
-        low_center_volume = dataset.get_low_center_volume()
-        high_volume = dataset.get_high_volume()
-
-        save_yz_map_figure(
+        save_xy_map_figure(
             low_center_volume=low_center_volume,
             high_volume=high_volume,
             prediction_volume=prediction_volume,
-            save_path=volume_dir / "yz_map_comparison.png",
+            save_path=volume_dir / "xy_map_comparison.png",
             title=(
                 f"{display_name} | {label} | {volume_key} | "
-                f"SSIM={ssim:.6f}"
+                f"X-Y MAP SSIM={ssim:.6f}"
             ),
         )
 
+        # Optional supplemental Y-Z slice figures.
         if config.save_slice_examples > 0:
             x_indices = np.linspace(
                 0,
@@ -1338,13 +1373,10 @@ def evaluate_single_volume(
                     ),
                 )
 
-    if (
-        config.save_prediction_volume
-        and save_prediction_output
-        and prediction_volume is not None
-    ):
+    if config.save_prediction_volume and save_prediction_output:
         volume_dir = model_result_dir / volume_key
         volume_dir.mkdir(parents=True, exist_ok=True)
+
         np.save(
             volume_dir / "prediction_volume.npy",
             prediction_volume,
@@ -1354,16 +1386,20 @@ def evaluate_single_volume(
         "volume": volume_key,
         "low_file": str(pair["low_path"]),
         "high_file": str(pair["high_path"]),
+        "metric_plane": "XY_MAP",
         "l1": l1,
         "mse": mse,
         "psnr": psnr,
         "ssim": ssim,
     }
 
+    del prediction_map_tensor
+    del high_map_tensor
     del prediction_volume
     del dataset
 
     return result
+
 
 def save_csv(rows: list[dict[str, Any]], path: Path) -> None:
     if not rows:
@@ -1411,7 +1447,7 @@ def evaluate_model(
     print(f"Test LOW       : {TEST_LOW_DIR}")
     print(f"Test HIGH      : {TEST_HIGH_DIR}")
     print(f"Volumes        : {len(selected_pairs)}")
-    print("PNG samples    : highest-SSIM 1 + lowest-SSIM 1 per model")
+    print("PNG samples    : highest/lowest X-Y MAP SSIM per model")
     print(f"Device         : {device}")
     print("=" * 88)
 
@@ -1465,7 +1501,7 @@ def evaluate_model(
 
     # ------------------------------------------------------------------
     # Select SSIM extremes for this model.
-    # SSIM is the per-volume mean over all X-indexed Y-Z slices.
+    # SSIM is calculated once per volume from its reconstructed X-Y MAP.
     # ------------------------------------------------------------------
     highest_ssim_row = max(
         per_volume_rows,
@@ -1504,7 +1540,7 @@ def evaluate_model(
     ) as file:
         json.dump(extremes, file, indent=2, ensure_ascii=False)
 
-    print("\nSSIM extremes selected for PNG generation")
+    print("\nX-Y MAP SSIM extremes selected for PNG generation")
     print(
         "  Highest SSIM : "
         f"{highest_ssim_row['volume']} "
@@ -1591,7 +1627,7 @@ def evaluate_model(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate PAM Y-Z 3-adjacent enhancement models "
+            "Evaluate PAM 3-adjacent enhancement models using X-Y MAP metrics "
             "from experiment folders 11 and 13 only."
         )
     )
@@ -1749,8 +1785,8 @@ def main() -> None:
     print(f"dtype            : {np.dtype(DATA_DTYPE)}")
     print(f"Header size      : {HEADER_SIZE} bytes")
     print(f"Requested models : {requested_model_keys}")
-    print("PNG policy       : highest SSIM 1 + lowest SSIM 1 per model")
-    print("Image rotation   : 90 degrees clockwise for MAP and slice")
+    print("PNG policy       : highest/lowest X-Y MAP SSIM per model")
+    print("MAP metric      : X-Y MAP = max projection over Z")
     print("Panel order      : LOW -> Prediction -> HIGH -> Absolute Error")
     print(f"Device           : {device}")
 
@@ -1807,6 +1843,7 @@ def main() -> None:
             print("\n" + "!" * 88)
             print(f"[FAILED] {registry_key}")
             print(f"{type(exc).__name__}: {exc}")
+            traceback.print_exc()
             print("!" * 88)
 
             if device.type == "cuda":
