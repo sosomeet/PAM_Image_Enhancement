@@ -124,7 +124,7 @@ class TrainConfig:
         self.batch_size = 2
         self.gradient_accumulation_steps = 4
 
-        self.num_workers = 4
+        self.num_workers = 0
         self.prefetch_factor = 2
         self.pin_memory = torch.cuda.is_available()
         self.persistent_workers = True
