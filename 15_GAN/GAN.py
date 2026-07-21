@@ -134,7 +134,7 @@ class TrainConfig:
 
 class SaveConfig:
     def __init__(self) -> None:
-        self.run_root = Path("./14_Pure_Conditional_GAN")
+        self.run_root = Path("./15_GAN")
 
         self.checkpoint_every = 10
         self.map_save_every = 5

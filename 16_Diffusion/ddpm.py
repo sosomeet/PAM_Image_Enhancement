@@ -137,7 +137,7 @@ class TrainConfig:
 
 class SaveConfig:
     def __init__(self) -> None:
-        self.run_root = Path("./14_Pure_Conditional_DDPM")
+        self.run_root = Path("./16_Diffusion")
 
         self.checkpoint_every = 10
         self.preview_every = 5

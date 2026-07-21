@@ -141,7 +141,7 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class SaveConfig:
-    experiment_root: Path = Path("./12_Attention_U-Net")
+    experiment_root: Path = Path("./14_Attention_U-Net")
     checkpoint_every: int = 10
     map_save_every: int = 5
     map_volume_index: int = 0
