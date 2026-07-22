@@ -10,14 +10,17 @@ PAM_Image_Enhancement/
 │  │  └─ LOW/        # float32, [X, C, Y, Z] = [200, 3, 200, 512]
 │  └─ norm_Test/
 │     └─ HIGH/       # float32, [X, Y, Z] = [200, 200, 512]
-├─ 11_Dual-Path_AFF_BEFD_SFA_FD-U-Net/
-├─ 13_Residual_Edge_Wavelet_Intensity/
+├─ 05_Vanilla_U-Net/
+├─ 13_Intensity_Loss_Residual/
+├─ 14_Attention_U-Net/
+├─ 15_GAN/
+├─ 16_Diffusion/
 └─ 99_model_evaluatoin/
    └─ model_evaluation.py
 
 Important
 ---------
-- Only experiment folders 11 and 13 are evaluated.
+- Only experiment folders 05, 13, 14, 15, and 16 are evaluated.
 - LOW test data is read from data/3d_Test/LOW.
 - HIGH target data is read from data/norm_Test/HIGH.
 - LOW files are already pre-generated 3-adjacent Y-Z inputs.
@@ -34,7 +37,7 @@ Important
 
 from __future__ import annotations
 
-EVALUATOR_VERSION = "2026-07-18-v7-xy-map-metrics-import-fix"
+EVALUATOR_VERSION = "2026-07-21-v8-models-05-13-14-15-16"
 
 
 import argparse
@@ -104,59 +107,108 @@ PSNR_SSIM_DATA_RANGE = 1.0
 # 2. Model registry
 # =============================================================================
 #
-# 05_Vanilla_U-Net is deliberately not included.
+# Only folders 05, 13, 14, 15, and 16 are registered.
 #
 # model_file:
 #   Exact file name when known. None means recursive auto-discovery.
 #
 # class_candidates:
-#   Exact likely network class names. If none match, the evaluator uses
-#   a scored automatic selector that prefers complete U-Net/model classes
-#   and rejects helper blocks/layers/attention modules.
+#   Likely complete-network class names. If none match, the evaluator uses
+#   a scored automatic selector and rejects helper blocks and discriminators.
+#
+# inference_mode:
+#   "direct"    -> prediction = model(input)
+#   "diffusion" -> use a sampling method such as sample()/ddim_sample().
 # =============================================================================
 
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
-    "dual_aff_befd_sfa_fd": {
-        "display_name": "Dual-Path + AFF + BEFD + SFA + Fully Dense U-Net",
-        "folder": "11_Dual-Path_AFF_BEFD_SFA_FD-U-Net",
-
-        # None = automatically discover the model .py file recursively.
-        # This is safer than hard-coding the file name.
+    "vanilla_unet": {
+        "display_name": "Vanilla U-Net",
+        "folder": "05_Vanilla_U-Net",
         "model_file": None,
-
         "class_candidates": [
-            "DualPathAFFBEFDSFAFDUNet",
-            "DualPathAFFFullyDenseSFABEFDUNet",
-            "DualPathBEFDSFAFDUNet",
-            "BEFDSFAFDUNet",
-            "FullyDenseSFAUNet",
+            "VanillaUNet",
             "UNet",
+            "UNet2D",
+            "PAMUNet",
             "Model",
         ],
         "init_kwargs": {},
+        "inference_mode": "direct",
     },
 
-    "intensity_aware_residual_edge_wavelet_multistage": {
-        "display_name": (
-            "E9.1 Intensity-Aware Residual + Edge + Wavelet "
-            "+ Multi-Stage Network"
-        ),
+    "intensity_loss_residual": {
+        "display_name": "Intensity-Loss Residual U-Net",
         "folder": "13_Intensity_Loss_Residual",
-
-        # None = automatically discover the model .py file recursively.
         "model_file": None,
-
         "class_candidates": [
             "E9ResidualEdgeWaveletMultiStageNet",
             "ResidualEdgeWaveletMultiStageUNet",
             "ResidualEdgeWaveletMultiStageNet",
             "ResidualEdgeWaveletUNet",
             "ResidualMultiStageUNet",
+            "IntensityResidualUNet",
             "ResidualUNet",
             "UNet",
             "Model",
         ],
         "init_kwargs": {},
+        "inference_mode": "direct",
+    },
+
+    "attention_unet": {
+        "display_name": "Attention U-Net",
+        "folder": "14_Attention_U-Net",
+        "model_file": None,
+        "class_candidates": [
+            "AttentionUNet",
+            "AttentionUNet2D",
+            "AttUNet",
+            "Attention_U_Net",
+            "PAMAttentionUNet",
+            "UNet",
+            "Model",
+        ],
+        "init_kwargs": {},
+        "inference_mode": "direct",
+    },
+
+    "gan": {
+        "display_name": "GAN Generator",
+        "folder": "15_GAN",
+        "model_file": None,
+        "class_candidates": [
+            "Generator",
+            "UNetGenerator",
+            "PAMGenerator",
+            "ConditionalGenerator",
+            "ResUNetGenerator",
+            "GeneratorUNet",
+            "GANGenerator",
+            "Model",
+        ],
+        "init_kwargs": {},
+        "inference_mode": "direct",
+    },
+
+    "diffusion": {
+        "display_name": "Diffusion Model",
+        "folder": "16_Diffusion",
+        "model_file": None,
+        "class_candidates": [
+            "ConditionalGaussianDiffusion",
+            "GaussianDiffusion",
+            "ConditionalDiffusion",
+            "DiffusionModel",
+            "DDPM",
+            "DiffusionUNet",
+            "ConditionalUNet",
+            "UNetModel",
+            "UNet",
+            "Model",
+        ],
+        "init_kwargs": {},
+        "inference_mode": "diffusion",
     },
 }
 
@@ -516,6 +568,12 @@ def architecture_score(cls: type[nn.Module]) -> int:
         "wavelet": 30,
         "multistage": 30,
         "multi_stage": 30,
+        "generator": 220,
+        "diffusion": 220,
+        "ddpm": 220,
+        "denoiser": 120,
+        "gaussian": 80,
+        "vanilla": 40,
     }
 
     negative_tokens = {
@@ -530,6 +588,10 @@ def architecture_score(cls: type[nn.Module]) -> int:
         "path": 80,
         "branch": 80,
         "conv": 60,
+        "discriminator": 500,
+        "critic": 500,
+        "trainer": 300,
+        "loss": 180,
     }
 
     for token, weight in positive_tokens.items():
@@ -666,12 +728,22 @@ def extract_state_dict(checkpoint: Any) -> dict[str, torch.Tensor]:
         )
 
     candidate_keys = (
+        "ema_model_state_dict",
+        "ema_state_dict",
+        "generator_state_dict",
+        "denoiser_state_dict",
+        "unet_state_dict",
+        "diffusion_state_dict",
         "model_state_dict",
         "state_dict",
+        "ema_model",
+        "generator",
+        "denoiser",
+        "unet",
+        "diffusion",
         "model",
         "network",
         "net",
-        "generator",
     )
 
     for key in candidate_keys:
@@ -812,6 +884,109 @@ def check_model_availability(registry_key: str) -> tuple[bool, str]:
 # =============================================================================
 # 6. Prediction handling and metrics
 # =============================================================================
+
+
+def _call_diffusion_sampler(
+    method: Any,
+    inputs: torch.Tensor,
+) -> Any:
+    """Call a diffusion sampling method using common parameter names."""
+    signature = inspect.signature(method)
+    parameters = signature.parameters
+
+    batch_size, _, height, width = inputs.shape
+    output_shape = (batch_size, OUTPUT_CHANNELS, height, width)
+
+    condition_names = {
+        "condition", "conditioning", "cond", "context", "context_image",
+        "low", "low_image", "input", "inputs", "source", "x_cond",
+    }
+    shape_names = {"shape", "sample_shape", "output_shape", "image_shape"}
+    batch_names = {"batch_size", "n", "num_samples", "sample_count"}
+
+    kwargs: dict[str, Any] = {}
+    unresolved_required: list[str] = []
+
+    for name, parameter in parameters.items():
+        lowered = name.lower()
+
+        if lowered in condition_names:
+            kwargs[name] = inputs
+        elif lowered in shape_names:
+            kwargs[name] = output_shape
+        elif lowered in batch_names:
+            kwargs[name] = batch_size
+        elif lowered == "device":
+            kwargs[name] = inputs.device
+        elif lowered in {"height", "h"}:
+            kwargs[name] = height
+        elif lowered in {"width", "w"}:
+            kwargs[name] = width
+        elif lowered in {"channels", "out_channels", "output_channels"}:
+            kwargs[name] = OUTPUT_CHANNELS
+        elif parameter.default is inspect.Parameter.empty and parameter.kind not in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }:
+            unresolved_required.append(name)
+
+    if not unresolved_required:
+        return method(**kwargs)
+
+    # Common compact signatures: sample(condition) or sample(condition, shape).
+    attempts = [
+        lambda: method(inputs),
+        lambda: method(inputs, output_shape),
+        lambda: method(output_shape, inputs),
+        lambda: method(shape=output_shape, condition=inputs),
+        lambda: method(batch_size=batch_size, condition=inputs),
+    ]
+
+    errors: list[str] = []
+    for attempt in attempts:
+        try:
+            return attempt()
+        except TypeError as exc:
+            errors.append(str(exc))
+
+    raise TypeError(
+        "Unable to call the diffusion sampler automatically. "
+        f"Sampler signature: {signature}. "
+        f"Unresolved required parameters: {unresolved_required}. "
+        "Add the model-specific sampling call inside run_model_inference()."
+    )
+
+
+def run_model_inference(
+    model: nn.Module,
+    inputs: torch.Tensor,
+    inference_mode: str,
+) -> Any:
+    if inference_mode == "direct":
+        return model(inputs)
+
+    if inference_mode != "diffusion":
+        raise ValueError(f"Unsupported inference mode: {inference_mode}")
+
+    sampler_names = (
+        "sample",
+        "ddim_sample",
+        "sample_loop",
+        "p_sample_loop",
+        "inference",
+        "predict",
+    )
+
+    for sampler_name in sampler_names:
+        sampler = getattr(model, sampler_name, None)
+        if callable(sampler):
+            return _call_diffusion_sampler(sampler, inputs)
+
+    raise RuntimeError(
+        "The diffusion model has no supported sampling method. "
+        f"Expected one of: {sampler_names}. "
+        "A diffusion denoiser cannot be evaluated by calling model(input) once."
+    )
 
 
 def extract_prediction(output: Any) -> torch.Tensor:
@@ -1185,6 +1360,7 @@ def evaluate_single_volume(
     config: EvaluationConfig,
     model_result_dir: Path,
     display_name: str,
+    inference_mode: str,
     save_visualization: bool,
     visualization_label: Optional[str] = None,
     save_prediction_output: bool = True,
@@ -1267,7 +1443,11 @@ def evaluate_single_volume(
                 dtype=torch.float16,
                 enabled=amp_enabled,
             ):
-                output = model(inputs)
+                output = run_model_inference(
+                    model=model,
+                    inputs=inputs,
+                    inference_mode=inference_mode,
+                )
                 predictions = extract_prediction(output)
 
                 if predictions.shape[-2:] != targets.shape[-2:]:
@@ -1444,6 +1624,7 @@ def evaluate_model(
     print(f"Model class    : {class_name}")
     print(f"Model file     : {model_file}")
     print(f"Final model    : {checkpoint_path}")
+    print(f"Inference mode : {entry.get('inference_mode', 'direct')}")
     print(f"Test LOW       : {TEST_LOW_DIR}")
     print(f"Test HIGH      : {TEST_HIGH_DIR}")
     print(f"Volumes        : {len(selected_pairs)}")
@@ -1470,6 +1651,7 @@ def evaluate_model(
             config=config,
             model_result_dir=model_result_dir,
             display_name=entry["display_name"],
+            inference_mode=entry.get("inference_mode", "direct"),
             save_visualization=False,
         )
 
@@ -1576,6 +1758,7 @@ def evaluate_model(
             config=config,
             model_result_dir=model_result_dir,
             display_name=entry["display_name"],
+            inference_mode=entry.get("inference_mode", "direct"),
             save_visualization=True,
             visualization_label=label,
             # Avoid re-saving prediction_volume.npy during this second pass.
@@ -1628,7 +1811,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate PAM 3-adjacent enhancement models using X-Y MAP metrics "
-            "from experiment folders 11 and 13 only."
+            "from experiment folders 05, 13, 14, 15, and 16 only."
         )
     )
 
@@ -1774,7 +1957,7 @@ def main() -> None:
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
 
     print("=" * 88)
-    print("PAM MODEL EVALUATION — FOLDERS 11 AND 13 ONLY — SSIM EXTREMES")
+    print("PAM MODEL EVALUATION — FOLDERS 05, 13, 14, 15, 16 ONLY — SSIM EXTREMES")
     print("=" * 88)
     print(f"Project root     : {PROJECT_ROOT}")
     print(f"Test LOW         : {TEST_LOW_DIR}")
