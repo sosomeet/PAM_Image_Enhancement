@@ -1,4 +1,62 @@
 # -*- coding: utf-8 -*-
+"""
+Pure Vanilla U-Net for PAM image enhancement.
+
+This script keeps the same training-artifact structure as the conditional DDPM
+script, but the network itself is a plain 2D U-Net:
+
+    3-adjacent LOW Y-Z slice [B,3,200,512]
+        -> Vanilla U-Net
+        -> HIGH Y-Z prediction [B,1,200,512]
+
+Included architecture components
+--------------------------------
+- Double 3x3 convolution blocks
+- 2x2 max pooling
+- Transposed-convolution upsampling
+- Encoder-to-decoder skip concatenation
+- Linear 1x1 output layer
+
+Excluded architecture components
+--------------------------------
+- Attention gates
+- Residual blocks
+- Dense blocks
+- BEFD / SFA / AFF
+- Edge or wavelet branches
+- GAN discriminator
+- Diffusion process
+- Multi-stage refinement
+
+Training objective
+------------------
+- L1 reconstruction loss only
+- MSE, PSNR, and SSIM are logged as evaluation metrics
+
+Data specification
+------------------
+LOW  : ./data/3d_Train/LOW/*.bin
+       float32 + 48-byte header
+       [X,C,Y,Z] = [200,3,200,512]
+
+HIGH : ./data/norm_Train/HIGH/*.bin
+       float32 + 48-byte header
+       [X,Y,Z] = [200,200,512]
+
+Generated artifacts
+-------------------
+05_Vanilla_U-Net/
+├─ models_enhancement/
+│  ├─ latest/model_latest.pth
+│  ├─ checkpoints/epoch_010.pth, ...
+│  └─ final/model_final.pth
+└─ outputs/
+   ├─ sample_previews/epoch_005_samples.png, ...
+   └─ history/
+      ├─ training_history.csv
+      └─ training_loss_curve.png
+"""
+
 from __future__ import annotations
 
 import csv
